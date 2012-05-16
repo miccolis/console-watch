@@ -1,0 +1,6 @@
+[
+    {
+        "name": "TCP connections",
+        "command": "netstat | wc -l"
+    }
+]
