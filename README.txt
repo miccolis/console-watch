@@ -30,6 +30,8 @@ To run these to commands every 10 seconds do:
 
     --config        Configuration file. Default is `settings.json`.
 
+    --verbose       Verbose output.
+
     --frequency     How often to run the commands in seconds. Defaults to 30
 
     --samples       The number of samples to collect, omit to run until killed. 

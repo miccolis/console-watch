@@ -6,18 +6,29 @@ var _ = require('underscore');
 var queue = require('queue-async');
 
 var argv = require('optimist')
-    .default('config', './settings.json')   // settings file.
-    .default('frequency', '30')             // polling frequency.
-    .default('out', false)                  // file to write to.
-    .default('samples', false)              // number of times to poll.
+    .describe('config', 'Settings file.')
+    .default('config', './settings.json')
+    .describe('frequency', 'Polling frequency in seconds.')
+    .default('frequency', '30')
+    .describe('out', 'File to write to.')
+    .default('out', false)
+    .describe('samples', 'Number of times to poll.')
+    .default('samples', false)
+    .describe('verbose', 'Enable verbose output')
+    .default('verbose', false)
+    .check(loadConfig)
     .argv;
 
-try {
-    var conf = require(argv.config);
-}
-catch (e) {
-    console.log('Unable to load config >> ' + e.toString());
-    process.exit(1);
+var conf;
+function loadConfig(args) {
+    try {
+        conf = require(args.config);
+    }
+    catch (e) {
+        throw new Error('Unable to load configuration in ' + args.config);
+    }
+
+    args.samples = (args.samples === false ? false : parseInt(args.samples, 10));
 }
 
 var metric = function(settings) {
@@ -38,9 +49,25 @@ metric.prototype.run = function(unixtime, cb) {
     }.bind(this));
 };
 
+metric.prototype.min = function() {
+    return _(this.history).chain().pluck('value').min().value();
+}
+
+metric.prototype.max = function() {
+    return _(this.history).chain().pluck('value').max().value();
+}
+
+metric.prototype.average = function() {
+    var sum = _(this.history).chain().pluck('value').reduce(function(m, n){
+        return m + n;
+    }, 0).value();
+
+    return (sum / this.history.length);
+}
+
 metric.prototype.report = function() {
     var v = _(this.history).last()
-    console.log("%s :: %s :: %s", this.name, new Date(v.time * 1000), v.value);
+    console.log("%s :: %s :: %d", this.name, new Date(v.time * 1000), v.value);
 };
 
 metric.prototype.toJSON = function() {
@@ -56,7 +83,7 @@ var schedule = function(items, wait, samples, done) {
         q.defer(function(ts, cb) {
             v.run(ts, function(err) {
                 if (err) return cb(err)
-                v.report();
+                if (argv.verbose) v.report();
                 cb();
             });
         }, (start / 1000 | 0));
@@ -80,25 +107,17 @@ var schedule = function(items, wait, samples, done) {
     });
 };
 
-var samples = (argv.samples === false ? false : parseInt(argv.samples, 10));
 
-console.log("Starting run...\n");
+var onExit = function() {
+    console.log("\nMeasured %d metrics %d times at %d second intervals",
+        metrics.length, metrics[0].history.length, argv.frequency);
 
-var jobs = queue();
-_(metrics).chain()
-    .groupBy(function(v) { return parseInt(argv.frequency, 10) * 1000 })
-    .each(function(items, wait) { jobs.defer(schedule, items, wait, samples) });
-
-jobs.await(function(err, results) {
-    if (err) {
-        console.warn(err.toString());
-        process.exit(1);
-    }
-
-    if (results.length) {
-        console.log("\nMeasured %s metrics %s times", metrics.length, samples);
-    }
-
+    _(metrics).each(function(m) {
+        var min = m.min();
+        var max = m.max();
+        var ave = m.average();
+        console.log('%s average: %d ( min %d : max %d )', m.name, ave, min, max);
+    });
 
     if (argv.out) {
         var data = JSON.stringify(metrics, null, 4);
@@ -111,4 +130,22 @@ jobs.await(function(err, results) {
             console.log('Wrote results to ' + argv.out);
         });
     }
+    process.exit();
+};
+process.on('SIGINT', onExit);
+
+console.log("Starting run...\n");
+
+var jobs = queue();
+_(metrics).chain()
+    .groupBy(function(v) { return parseInt(argv.frequency, 10) * 1000 })
+    .each(function(items, wait) { jobs.defer(schedule, items, wait, argv.samples) });
+
+jobs.await(function(err) {
+    if (err) {
+        console.warn(err.toString());
+        onExit();
+        return process.exit(1);
+    }
+    onExit();
 });
